@@ -473,41 +473,46 @@ def reproject_to_hips(
         make_tile_folders(level=level, indices=indices, output_directory=output_directory)
 
     # Helper function to load and combine with existing FITS tiles
-    # TODO: update this to handle ndim=3
     def load_existing_fits_tile(tile_path, s3_storage=None):
         """Load an existing FITS tile and return (array, footprint)."""
-        if s3_storage:
-            # Load from S3
-            if not s3_storage.exists(tile_path):
-                return None, None
-            try:
-                data, header = s3_storage.read_fits(tile_path)
-            except Exception as e:
-                logger.warning(f"Failed to load FITS tile from S3 {tile_path}: {e}")
-                return None, None
+        if ndim == 3:
+            # For 3D tiles, use the untrimmed loader to handle TRIM keywords
+            array_existing = fits_getdata_untrimmed(
+                tile_path, tile_size=tile_size, tile_depth=tile_depth
+            )
         else:
-            # Load from local filesystem
-            with fits.open(tile_path) as hdulist:
-                data = hdulist[0].data
-                header = hdulist[0].header
-                
-        # Pad the array back to full tile size using TRIM keywords
-        pad_before = (
-            header.get("TRIM3", 0),  # TRIM3 is NAXIS1 (width)
-            header.get("TRIM2", 0),  # TRIM2 is NAXIS2 (height)
-        )
-        shape = data.shape
-        pad_after = (
-            tile_size - shape[0] - pad_before[0],
-            tile_size - shape[1] - pad_before[1],
-        )
-        
-        array_existing = np.pad(
-            data,
-            list(zip(pad_before, pad_after, strict=False)),
-            mode="constant",
-            constant_values=np.nan,
-        )
+            if s3_storage:
+                # Load from S3
+                if not s3_storage.exists(tile_path):
+                    return None, None
+                try:
+                    data, header = s3_storage.read_fits(tile_path)
+                except Exception as e:
+                    logger.warning(f"Failed to load FITS tile from S3 {tile_path}: {e}")
+                    return None, None
+            else:
+                # Load from local filesystem
+                with fits.open(tile_path) as hdulist:
+                    data = hdulist[0].data
+                    header = hdulist[0].header
+                    
+            # Pad the array back to full tile size using TRIM keywords
+            pad_before = (
+                header.get("TRIM3", 0),  # TRIM3 is NAXIS1 (width)
+                header.get("TRIM2", 0),  # TRIM2 is NAXIS2 (height)
+            )
+            shape = data.shape
+            pad_after = (
+                tile_size - shape[0] - pad_before[0],
+                tile_size - shape[1] - pad_before[1],
+            )
+            
+            array_existing = np.pad(
+                data,
+                list(zip(pad_before, pad_after, strict=False)),
+                mode="constant",
+                constant_values=np.nan,
+            )
 
         # Create footprint: 1 where data is not NaN, 0 otherwise
         footprint_existing = np.where(np.isnan(array_existing), 0, 1)
