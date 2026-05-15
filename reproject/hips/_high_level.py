@@ -40,7 +40,7 @@ from ._utils import (
     tile_header,
 )
 
-__all__ = ["reproject_from_hips", "reproject_to_hips", "coadd_hips"]
+__all__ = ["reproject_from_hips", "reproject_to_hips", "coadd_hips", "compute_lower_resolution_tiles"]
 
 
 INDEX_HTML = """
@@ -243,7 +243,7 @@ def reproject_to_hips(
         logger.info(f"Automatically set the HEALPIX level to {level}")
 
     # Create output directory (and error if it already exists)
-    os.makedirs(output_directory, exist_ok=False)
+    os.makedirs(output_directory, exist_ok=True)
 
     # Determine center of image and radius to furthest corner, to determine
     # which HiPS tiles need to be generated
@@ -344,6 +344,41 @@ def reproject_to_hips(
     # Make all the folders required for the tiles
     make_tile_folders(level=level, indices=indices, output_directory=output_directory)
 
+    # Helper function to load and combine with existing FITS tiles
+    def load_existing_fits_tile(tile_path):
+        """Load an existing FITS tile and return (array, footprint)."""
+        if ndim == 3:
+            # For 3D tiles, use the untrimmed loader to handle TRIM keywords
+            array_existing = fits_getdata_untrimmed(
+                tile_path, tile_size=tile_size, tile_depth=tile_depth
+            )
+        else:
+            # For 2D tiles, load directly and handle trimming manually
+            with fits.open(tile_path) as hdulist:
+                data = hdulist[0].data
+                header = hdulist[0].header
+            
+            # Pad the array back to full tile size using TRIM keywords
+            pad_before = (
+                header.get("TRIM3", 0),  # TRIM3 is NAXIS1 (width)
+                header.get("TRIM2", 0),  # TRIM2 is NAXIS2 (height)
+            )
+            shape = data.shape
+            pad_after = (
+                tile_size - shape[0] - pad_before[0],
+                tile_size - shape[1] - pad_before[1],
+            )
+            
+            array_existing = np.pad(
+                data,
+                list(zip(pad_before, pad_after, strict=False)),
+                mode="constant",
+                constant_values=np.nan,
+            )
+        # Create footprint: 1 where data is not NaN, 0 otherwise
+        footprint_existing = np.where(np.isnan(array_existing), 0, 1)
+        return array_existing, footprint_existing
+
     # Iterate over the tiles and generate them
     def process(index):
         if hasattr(wcs_in, "deepcopy"):
@@ -373,6 +408,40 @@ def reproject_to_hips(
         if np.all(footprint == 0):
             return None
 
+        # Check if tile already exists and merge if so
+        tile_path = tile_filename(
+            level=level,
+            index=index,
+            output_directory=output_directory,
+            extension=EXTENSION[tile_format],
+        )
+
+        if os.path.exists(tile_path):
+            try:
+                array_existing, footprint_existing = load_existing_fits_tile(tile_path)
+                
+                # Weighted average combining using footprints
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    total_footprint = footprint_existing + footprint
+                    # Combine where we have any coverage
+                    mask_combined = total_footprint > 0
+                    
+                    array_out_combined = np.full_like(array_out, np.nan)
+                    array_out_combined[mask_combined] = (
+                        np.nan_to_num(array_existing[mask_combined]) * footprint_existing[mask_combined] + 
+                        np.nan_to_num(array_out[mask_combined]) * footprint[mask_combined]
+                    ) / total_footprint[mask_combined]
+                    
+                    # Average footprints
+                    footprint_combined = np.zeros_like(footprint)
+                    footprint_combined[mask_combined] = np.minimum(total_footprint[mask_combined] / 2.0, 1.0)
+                    
+                    array_out = array_out_combined
+                    footprint = footprint_combined
+                    
+            except Exception as e:
+                logger.warning(f"Failed to load existing FITS tile {tile_path}: {e}. Overwriting.")
+
         if tile_format == "fits":
             array_out[footprint == 0] = np.nan
             pixel_min = np.nanmin(array_out)
@@ -386,6 +455,7 @@ def reproject_to_hips(
                 ),
                 array_out,
                 header,
+                overwrite=True,
             )
 
         else:
@@ -479,16 +549,16 @@ def reproject_to_hips(
 
     save_index(output_directory)
 
-    compute_lower_resolution_tiles(
-        output_directory=output_directory,
-        ndim=ndim,
-        frame=frame,
-        tile_format=tile_format,
-        tile_size=tile_size,
-        tile_depth=tile_depth,
-        spatial_level=spatial_level,
-        level_depth=level_depth,
-    )
+    # compute_lower_resolution_tiles(
+    #     =output_directory,
+    #     ndim=ndim,
+    #     frame=frame,
+    #     tile_format=tile_format,
+    #     tile_size=tile_size,
+    #     tile_depth=tile_depth,
+    #     spatial_level=spatial_level,
+    #     level_depth=level_depth,
+    # )
 
 
 def find_indices(*, output_directory, ndim, spatial_level, level_depth):
@@ -502,7 +572,10 @@ def find_indices(*, output_directory, ndim, spatial_level, level_depth):
 
         for _, _, filenames in os.walk(norder_directory):
             for filename in filenames:
-                yield int(filename.split(".")[0].replace("Npix", ""))
+                try:
+                    yield int(filename.split(".")[0].replace("Npix", ""))
+                except Exception:
+                    raise Exception(f"Unexpected filename format: {filename}")
 
     else:
 
@@ -685,6 +758,7 @@ def compute_lower_resolution_tiles(
                     ),
                     array,
                     header,
+                    overwrite=True,
                 )
             else:
                 image = as_transparent_rgb(array.transpose(2, 0, 1))
