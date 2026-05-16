@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Any, List, Dict
 from threading import Lock
 import boto3
+import argparse
 
 import logging
 
@@ -189,7 +190,23 @@ def process_s3_batches(
 
 
 if __name__ == "__main__":
-    output_dir = "roman_simulation_hips"
+    parser = argparse.ArgumentParser(description='Process ROMAN L3 images and generate HiPS tiles')
+    parser.add_argument(
+        '--output-dir',
+        type=str,
+        default='roman_simulation_hips',
+        help='Output directory for HiPS tiles (default: roman_simulation_hips)'
+    )
+    parser.add_argument(
+        '--num-threads',
+        type=int,
+        default=4,
+        help='Number of threads for concurrent processing (default: 4)'
+    )
+    args = parser.parse_args()
+    
+    output_dir = args.output_dir
+    num_threads = args.num_threads
 
     logger = logging.getLogger()
     s3 = boto3.client('s3', config=Config(signature_version=UNSIGNED))
@@ -198,7 +215,7 @@ if __name__ == "__main__":
         func=process_l3_from_s3,
         bucket_name='stpubdata',
         prefix='roman/nexus/soc_simulations/r00342/l3/',
-        num_threads=4,
+        num_threads=num_threads,
         s3_client=s3,
         output_dir=output_dir
     )
