@@ -28,6 +28,7 @@ from multiprocessing import Manager
 import boto3
 import argparse
 
+from tqdm import tqdm
 import logging
 
 # Configure logging
@@ -43,7 +44,7 @@ def process_sky_cell(file_path, output_dir):
     data = np.asarray(asdf_file.data)
     wcs = asdf_file.meta.wcs
     ndd = NDData(data=data, wcs=wcs)
-    
+
     vmin, vmax = np.nanpercentile(data, [1, 99])   # tune percentiles as desired
     
     properties = {"hips_pixel_cut": f"{vmin} {vmax}"}
@@ -54,7 +55,9 @@ def process_sky_cell(file_path, output_dir):
         reproject_function=reproject.interpolation.reproject_interp,
         output_directory=output_dir,
         level=13,
-        properties=properties
+        properties=properties,
+        progress_bar=tqdm,
+        threads=32
     )
 
 def process_l3_from_s3(token_holder, bucket_name, prefix, output_dir):
@@ -209,6 +212,12 @@ if __name__ == "__main__":
         default=4,
         help='Number of processes for concurrent processing (default: 4)'
     )
+    parser.add_argument(
+        '--action',
+        type=str,
+        choices=['process_l3', 'compute_tiles', 'both'],
+        default='both',
+    )
     args = parser.parse_args()
     
     output_dir = args.output_dir
@@ -216,28 +225,31 @@ if __name__ == "__main__":
 
     logger = logging.getLogger()
 
-    results = process_s3_batches(
-        func=process_l3_from_s3,
-        bucket_name='stpubdata',
-        prefix='roman/nexus/soc_simulations/r00342/l3/',
-        num_processes=num_processes,
-        output_dir=output_dir
-    )
+    if args.action in ['process_l3', 'both']:
+        # Process L3 images from S3 and generate HiPS tiles
+        results = process_s3_batches(
+            func=process_l3_from_s3,
+            bucket_name='stpubdata',
+            prefix='roman/nexus/soc_simulations/r00342/l3/',
+            num_processes=num_processes,
+            output_dir=output_dir
+        )
 
-    # Compute lower resolution tiles
-    start_time = datetime.now()
-    logger.info(f"Starting lower resolution tile computation.")
+    if args.action in ['compute_tiles', 'both']:
+        # Compute lower resolution tiles
+        start_time = datetime.now()
+        logger.info(f"Starting lower resolution tile computation.")
 
-    hips.compute_lower_resolution_tiles(
-        output_directory=output_dir,
-        ndim=2,
-        frame=Galactic(),
-        tile_format="fits",
-        tile_size=512,
-        tile_depth=16,
-        spatial_level=13,
-        level_depth=None
-    )
+        hips.compute_lower_resolution_tiles(
+            output_directory=output_dir,
+            ndim=2,
+            frame=Galactic(),
+            tile_format="fits",
+            tile_size=512,
+            tile_depth=16,
+            spatial_level=13,
+            level_depth=None
+        )
 
-    end_time = datetime.now()
-    logger.info(f"Finished lower resolution tile computation. Elapsed time: {end_time - start_time}")
+        end_time = datetime.now()
+        logger.info(f"Finished lower resolution tile computation. Elapsed time: {end_time - start_time}")
