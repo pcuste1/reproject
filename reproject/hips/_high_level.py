@@ -1,3 +1,4 @@
+import io
 import os
 import shutil
 import uuid
@@ -8,6 +9,8 @@ from datetime import UTC, datetime
 from itertools import product
 from logging import getLogger
 from pathlib import Path
+
+import boto3
 
 import numpy as np
 from astropy import units as u
@@ -88,6 +91,104 @@ VALID_TILE_FORMATS = {"fits", "png", "jpeg"}
 EXTENSION = {"fits": "fits", "png": "png", "jpeg": "jpg"}
 
 
+class S3Storage:
+    """Helper class for S3 storage operations."""
+
+    def __init__(self, bucket):
+        if boto3 is None:
+            raise ImportError("boto3 is required for S3 support. Install it with: pip install boto3")
+        self.bucket = bucket
+        self.s3_client = boto3.client("s3")
+
+    def exists(self, key):
+        """Check if an object exists in S3."""
+        try:
+            self.s3_client.head_object(Bucket=self.bucket, Key=key)
+            return True
+        except Exception:
+            return False
+
+    def read_bytes(self, key):
+        """Read object from S3 and return bytes."""
+        response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
+        return response["Body"].read()
+
+    def write_bytes(self, key, data):
+        """Write bytes to S3."""
+        self.s3_client.put_object(Bucket=self.bucket, Key=key, Body=data)
+
+    def read_fits(self, key):
+        """Read FITS file from S3 and return (data, header)."""
+        data_bytes = self.read_bytes(key)
+        with fits.open(io.BytesIO(data_bytes)) as hdulist:
+            return hdulist[0].data.copy(), hdulist[0].header.copy()
+
+    def write_fits(self, key, data, header):
+        """Write FITS file to S3."""
+        with io.BytesIO() as f:
+            hdu = fits.PrimaryHDU(data=data, header=header)
+            hdu.writeto(f, overwrite=True)
+            f.seek(0)
+            self.write_bytes(key, f.read())
+
+
+def _parse_s3_url(url):
+    """
+    Parse an S3 URL to extract bucket, prefix, and directory.
+
+    Supported formats:
+        s3://bucket/directory
+        s3://bucket/prefix/directory
+        s3://bucket/prefix/sub/directory
+
+    The last path component is treated as the directory/dataset name,
+    and everything before it is the prefix.
+
+    Parameters
+    ----------
+    url : str
+        S3 URL starting with "s3://"
+
+    Returns
+    -------
+    bucket : str or None
+        AWS S3 bucket name, or None if url is not an S3 URL
+    prefix : str
+        Prefix path within the bucket (empty string if no prefix)
+    directory : str
+        The dataset directory name
+    """
+    if not isinstance(url, str) or not url.startswith("s3://"):
+        return None, None, None
+
+    # Remove "s3://" prefix
+    url = url[5:]
+
+    # Split into bucket and path
+    parts = url.split("/", 1)
+    bucket = parts[0]
+
+    if not bucket:
+        raise ValueError("S3 URL must include bucket name: s3://bucket/...")
+
+    if len(parts) == 1:
+        # s3://bucket with no path
+        raise ValueError("S3 URL must include directory: s3://bucket/directory")
+
+    path = parts[1]
+    if not path:
+        raise ValueError("S3 URL must include directory: s3://bucket/directory")
+
+    # Split path into prefix and directory (last component is directory)
+    path_parts = path.rsplit("/", 1)
+    if len(path_parts) == 1:
+        # s3://bucket/directory (no prefix)
+        return bucket, "", path_parts[0]
+    else:
+        # s3://bucket/prefix/directory
+        return bucket, path_parts[0], path_parts[1]
+
+
 def reproject_from_hips():
     raise NotImplementedError()
 
@@ -138,8 +239,12 @@ def reproject_to_hips(
     reproject_function : callable
         The function to use for the reprojection.
     output_directory : str
-        The name of the output directory - if this already exists, an error
-        will be raised.
+        The name of the output directory. Can be:
+
+        * A local filesystem path (e.g., "./my_hips" or "/data/hips")
+        * An S3 URL (e.g., "s3://bucket/dataset" or "s3://bucket/prefix/dataset")
+          When an S3 URL is provided, the bucket and prefix are automatically
+          extracted and S3 storage is used instead of the local filesystem.
     level : int, optional
         The number of levels of tiles for celestial coordinates.
     level_depth : int, optional
@@ -200,6 +305,20 @@ def reproject_to_hips(
             f"dimensions do not match"
         )
 
+    # Check if output_directory is an S3 URL and parse it
+    s3_bucket_parsed, s3_prefix_parsed, s3_directory = _parse_s3_url(output_directory)
+    use_s3 = s3_bucket_parsed is not None
+
+    if use_s3:
+        # S3 URL provided in output_directory
+        s3_storage = S3Storage(s3_bucket_parsed)
+        # Construct the full S3 key prefix for this HiPS dataset
+        if s3_prefix_parsed:
+            s3_output_prefix = f"{s3_prefix_parsed}/{s3_directory}"
+        else:
+            s3_output_prefix = s3_directory
+        output_directory = s3_directory  # Use just the directory name locally
+
     if wcs_in.low_level_wcs.pixel_n_dim == 2:
         ndim = 2
     elif wcs_in.low_level_wcs.pixel_n_dim == 3:
@@ -254,8 +373,9 @@ def reproject_to_hips(
         level = int(nside_to_level(nside))
         logger.info(f"Automatically set the HEALPIX level to {level}")
 
-    # Create output directory (and error if it already exists)
-    os.makedirs(output_directory, exist_ok=True)
+    # Create output directory (only needed for local filesystem)
+    if not use_s3:
+        os.makedirs(output_directory, exist_ok=True)
 
     # Determine center of image and radius to furthest corner, to determine
     # which HiPS tiles need to be generated
@@ -348,24 +468,36 @@ def reproject_to_hips(
     # PERF: the code above may be prohibitive for large numbers of tiles,
     # so we may want to find a way to iterate over these in chunks.
 
-    # Make all the folders required for the tiles
-    make_tile_folders(level=level, indices=indices, output_directory=output_directory)
+    # Make all the folders required for the tiles (not needed for S3)
+    if not use_s3:
+        make_tile_folders(level=level, indices=indices, output_directory=output_directory)
 
     # Helper function to load and combine with existing FITS tiles
-    def load_existing_fits_tile(tile_path):
+    # TODO: update this to handle ndim=3
+    def load_existing_fits_tile(tile_path, s3_storage=None):
         """Load an existing FITS tile and return (array, footprint)."""
-        if ndim == 3:
-            # For 3D tiles, use the untrimmed loader to handle TRIM keywords
+        if s3_storage:
+            # Load from S3
+            if not s3_storage.exists(tile_path):
+                return None, None
+            try:
+                data, header = s3_storage.read_fits(tile_path)
+            except Exception as e:
+                logger.warning(f"Failed to load FITS tile from S3 {tile_path}: {e}")
+                return None, None
+        elif ndim == 3:
             array_existing = fits_getdata_untrimmed(
                 tile_path, tile_size=tile_size, tile_depth=tile_depth
             )
         else:
-            # For 2D tiles, load directly and handle trimming manually
+            # Load from local filesystem
             with fits.open(tile_path) as hdulist:
                 data = hdulist[0].data
                 header = hdulist[0].header
 
-            # Pad the array back to full tile size using TRIM keywords
+        if s3_storage and ndim == 3:
+            array_existing = data
+        elif ndim == 2:
             pad_before = (
                 header.get("TRIM3", 0),  # TRIM3 is NAXIS1 (width)
                 header.get("TRIM2", 0),  # TRIM2 is NAXIS2 (height)
@@ -382,6 +514,7 @@ def reproject_to_hips(
                 mode="constant",
                 constant_values=np.nan,
             )
+
         # Create footprint: 1 where data is not NaN, 0 otherwise
         footprint_existing = np.where(np.isnan(array_existing), 0, 1)
         return array_existing, footprint_existing
@@ -414,56 +547,70 @@ def reproject_to_hips(
         if np.all(footprint == 0):
             return None
 
+        # Generate tile path
+        if use_s3:
+            # For S3, construct the S3 key
+            tile_relative_path = tile_filename(
+                level=level,
+                index=index,
+                output_directory="",
+                extension=EXTENSION[tile_format],
+            ).lstrip("/")
+            tile_path = f"{s3_output_prefix}/{tile_relative_path}"
+        else:
+            # For local filesystem
+            tile_path = tile_filename(
+                level=level,
+                index=index,
+                output_directory=output_directory,
+                extension=EXTENSION[tile_format],
+            )
+
         # Check if tile already exists and merge if so
-        tile_path = tile_filename(
-            level=level,
-            index=index,
-            output_directory=output_directory,
-            extension=EXTENSION[tile_format],
-        )
+        if use_s3:
+            tile_exists = s3_storage.exists(tile_path)
+        else:
+            tile_exists = os.path.exists(tile_path)
 
-        if os.path.exists(tile_path):
+        if tile_exists:
             try:
-                array_existing, footprint_existing = load_existing_fits_tile(tile_path)
+                array_existing, footprint_existing = load_existing_fits_tile(
+                    tile_path, s3_storage=s3_storage if use_s3 else None
+                )
+                if array_existing is not None:
+                    # Weighted average combining using footprints
+                    with np.errstate(invalid="ignore", divide="ignore"):
+                        total_footprint = footprint_existing + footprint
+                        # Combine where we have any coverage
+                        mask_combined = total_footprint > 0
 
-                # Weighted average combining using footprints
-                with np.errstate(invalid="ignore", divide="ignore"):
-                    total_footprint = footprint_existing + footprint
-                    # Combine where we have any coverage
-                    mask_combined = total_footprint > 0
+                        array_out_combined = np.full_like(array_out, np.nan)
+                        array_out_combined[mask_combined] = (
+                            np.nan_to_num(array_existing[mask_combined])
+                            * footprint_existing[mask_combined]
+                            +
+                            np.nan_to_num(array_out[mask_combined]) * footprint[mask_combined]
+                        ) / total_footprint[mask_combined]
 
-                    array_out_combined = np.full_like(array_out, np.nan)
-                    array_out_combined[mask_combined] = (
-                        np.nan_to_num(array_existing[mask_combined]) * footprint_existing[mask_combined]
-                        +
-                        np.nan_to_num(array_out[mask_combined]) * footprint[mask_combined]
-                    ) / total_footprint[mask_combined]
+                        # Average footprints
+                        footprint_combined = np.zeros_like(footprint)
+                        footprint_combined[mask_combined] = np.minimum(total_footprint[mask_combined] / 2.0, 1.0)
 
-                    # Average footprints
-                    footprint_combined = np.zeros_like(footprint)
-                    footprint_combined[mask_combined] = np.minimum(total_footprint[mask_combined] / 2.0, 1.0)
-
-                    array_out = array_out_combined
-                    footprint = footprint_combined
-
+                        array_out = array_out_combined
+                        footprint = footprint_combined
             except Exception as e:
-                logger.warning(f"Failed to load existing FITS tile {tile_path}: {e}. Overwriting.")
+                logger.warning(f"Failed to load existing tile {tile_path}: {e}. Overwriting.")
 
+        # Write tile
         if tile_format == "fits":
             array_out[footprint == 0] = np.nan
             pixel_min = np.nanmin(array_out)
             pixel_max = np.nanmax(array_out)
-            fits_writeto_withtrim(
-                tile_filename(
-                    level=level,
-                    index=index,
-                    output_directory=output_directory,
-                    extension=EXTENSION[tile_format],
-                ),
-                array_out,
-                header,
-                overwrite=True,
-            )
+
+            if use_s3:
+                s3_storage.write_fits(tile_path, array_out, header)
+            else:
+                fits_writeto_withtrim(tile_path, array_out, header, overwrite=True)
 
         else:
             if tile_format == "png":
@@ -471,14 +618,8 @@ def reproject_to_hips(
             else:
                 array_out[np.isnan(array_out)] = 0.0
                 image = as_transparent_rgb(array_out).convert("RGB")
-            image.save(
-                tile_filename(
-                    level=level,
-                    index=index,
-                    output_directory=output_directory,
-                    extension=EXTENSION[tile_format],
-                )
-            )
+            # TODO: update non fits logic to write to s3
+            image.save(tile_path)
             pixel_min, pixel_max = None, None
 
         return index, pixel_min, pixel_max
@@ -552,9 +693,20 @@ def reproject_to_hips(
 
     generated_properties.update(properties)
 
-    save_properties(output_directory, generated_properties)
+    if use_s3:
+        # Save properties to S3
+        properties_content = "\n".join(
+            f"{key:20s} = {value}" for key, value in generated_properties.items()
+        )
+        properties_key = f"{s3_output_prefix}/properties"
+        s3_storage.write_bytes(properties_key, properties_content.encode("utf-8"))
 
-    save_index(output_directory)
+        # Save index.html to S3
+        index_key = f"{s3_output_prefix}/index.html"
+        s3_storage.write_bytes(index_key, INDEX_HTML.encode("utf-8"))
+    else:
+        save_properties(output_directory, generated_properties)
+        save_index(output_directory)
 
     if generate_moc:
         save_moc(
@@ -614,7 +766,7 @@ def compute_lower_resolution_tiles(
     level_depth,
     indices=None,
 ):
-
+    logger = getLogger(__name__)
     if ndim == 3:
         tile_dims = tile_size, tile_depth
     else:
