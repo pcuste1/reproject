@@ -14,6 +14,10 @@ import numpy as np
 import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
+from astroquery.mast.missions import MastMissions
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+from glob import glob
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -39,9 +43,10 @@ logging.basicConfig(
 )
 
 def process_sky_cell(file_path, output_dir):
-    asdf_file = rdm.open(f"https://stpubdata.s3.us-east-1.amazonaws.com/{file_path}")
+    asdf_file = rdm.open(f"https://stpubdata.s3.us-east-1.amazonaws.com/roman/nexus/soc_simulations/r00342/l3/{file_path}")
     
     data = np.asarray(asdf_file.data)
+    # data = (data - np.nanmin(data)) / (np.nanmax(data) - np.nanmin(data))
     wcs = asdf_file.meta.wcs
     ndd = NDData(data=data, wcs=wcs)
 
@@ -53,103 +58,112 @@ def process_sky_cell(file_path, output_dir):
         input_data=ndd,
         coord_system_out="equatorial",
         reproject_function=reproject.interpolation.reproject_interp,
+        # reproject_function=reproject.reproject_adaptive,
         output_directory=output_dir,
         level=13,
         properties=properties,
-        progress_bar=tqdm,
-        threads=32
+        # progress_bar=tqdm,
+        threads=10
     )
 
-def process_l3_from_s3(token_holder, bucket_name, prefix, output_dir):
+# Use MAST test to access simulated Roman observations:
+def _use_mast_test(mast):
+    mast._service_api_connection.SERVICE_URL = 'https://mastint.stsci.edu'
+    mast._service_api_connection.REQUEST_URL = 'https://mastint.stsci.edu/search/roman/api/v0.1/'
+    mast._service_api_connection.MISSIONS_DOWNLOAD_URL = 'https://mastint.stsci.edu/search/'
+
+def process_l3_from_s3(shared_data, bucket_name, prefix, output_dir):
     logger = logging.getLogger()
     
     # Create S3 client in the worker process
     s3_client = boto3.client('s3', config=Config(signature_version=UNSIGNED))
     
     # Get current token (process-safe)
-    with token_holder['lock']:
-        current_token = token_holder['token']
+    with shared_data['lock']:
+        current_offset = shared_data['offset']
+
+        mm = MastMissions(mission='roman')
+        _use_mast_test(mm)
     
-        # Query S3
-        if current_token:
-            response = s3_client.list_objects_v2(
-                Bucket=bucket_name,
-                Prefix=prefix,
-                ContinuationToken=current_token
-            )
-        else:
-            response = s3_client.list_objects_v2(
-                Bucket=bucket_name,
-                Prefix=prefix
-            )
+        # Query missions mast
+        #8.42377562 -44.6996920
+        # coord = SkyCoord(ra=8.42377562 * u.deg, dec=-44.6996920 * u.deg)
+        query_results = mm.query_criteria(
+            # coordinates=coord, 
+            # radius=30*u.arcmin, 
+            productLevel='3',
+            offset=current_offset,
+            limit=10,
+            optical_element='F158',
+            program='00342',
+            select_cols=['fileSetName']
+        )
         
         # Update token for next process (process-safe)
-        next_token = response.get('NextContinuationToken')
-        token_holder['token'] = next_token
-
+        shared_data['offset'] = current_offset + len(query_results)
 
     # If no contents, we're done
-    if not response.get('Contents'):
+    if not query_results:
         return None
 
-        
     start_time = datetime.now()
-    contents = [c for c in response["Contents"] if c["Key"][-10:] == "coadd.asdf"]
+    files = [f"{obs['fileSetName']}_coadd.asdf" for obs in query_results]
 
-    logger.info(f"Begin processing batch with {len(contents)} L3 images.")
+    logger.info(f"Begin processing batch with {len(files)} L3 images.")
     
     count = 0
     success = 0
     # Process your objects here
-    for c in contents:
-        file_path = c["Key"]
-        
+    for file in files:
         try:
-            process_sky_cell(file_path, output_dir)
+            process_sky_cell(file, output_dir)
             success += 1
         except Exception as ex:
-            logger.error(f"Error processing {file_path}: {ex}")
+            logger.error(f"Error processing {file}: {ex}")
         count += 1
 
         if count % 20 == 0:
-            logger.info(f"Processed {count}/{len(contents)} L3 images.")
+            logger.info(f"Processed {count}/{len(files)} L3 images.")
     
     end_time = datetime.now()
-    logger.info(f"[{end_time}] Finished processing batch. {success}/{len(contents)} L3 images processed successfully.")
-    return end_time - start_time, count
+    elapsed_time = end_time - start_time
+    logger.info(f"[{elapsed_time}] Finished processing batch. {success}/{len(files)} L3 images processed successfully.")
+    return elapsed_time, count
 
-def _worker_process(token_holder, bucket_name, prefix, func, kwargs):
+def _worker_process(shared_data, bucket_name, prefix, max_files, func, kwargs):
     """Module-level worker function for pickling compatibility."""
     logger = logging.getLogger()
     logger.info("Process started, entering worker loop")
     
     iteration = 0
-    results = []
-    while True:
+    total_files_processed = 0
+    while iteration < max_files/10:  # Prevent infinite loop
         iteration += 1
         logger.debug(f"Iteration {iteration}: Calling process function")
         
-        result = func(
-            token_holder=token_holder,
+        elapsed_time, processed_file_count = func(
+            shared_data=shared_data,
             bucket_name=bucket_name,
             prefix=prefix,
             **kwargs
         )
         
-        if result is None:
+        if processed_file_count == 0:
             logger.info("No more batches, process exiting")
             break
         
-        logger.info(f"Batch processed: {result}")
-        results.append(result)
+        logger.info(f"Batch processed: {elapsed_time}, {processed_file_count}")
+        total_files_processed += processed_file_count
     
-    return results
+    return total_files_processed
 
 def process_s3_batches(
     func: Callable,
     bucket_name: str,
     prefix: str,
     num_processes: int = 4,
+    max_files: int = 100,
+    offset: int = 0,
     **kwargs
 ) -> List[Any]:
     """
@@ -159,12 +173,12 @@ def process_s3_batches(
     responsible for querying S3, processing the batch, and updating the token.
     
     Args:
-        func: Function called by each process. Receives (token_holder, bucket_name, 
+        func: Function called by each process. Receives (shared_data, bucket_name, 
               prefix, **kwargs). Should:
-              1. Get current token from token_holder['token']
+              1. Get current token from shared_data['token']
               2. Query S3 with that token
               3. Process the batch
-              4. Update token_holder['token'] with NextContinuationToken or None
+              4. Update shared_data['token'] with NextContinuationToken or None
               5. Return result (or None if no more batches)
         bucket_name: S3 bucket name
         prefix: S3 prefix to list objects under
@@ -176,25 +190,26 @@ def process_s3_batches(
     """
     # Process-safe token holder using Manager
     with Manager() as manager:
-        token_holder = manager.dict()
-        token_holder['token'] = None  # None means fetch first batch
-        token_holder['lock'] = manager.Lock()
+        shared_data = manager.dict()
+        shared_data['offset'] = offset
+        shared_data['lock'] = manager.Lock()
         
         logger = logging.getLogger()
         logger.info(f"Starting batch processing with {num_processes} processes")
         
-        all_results = []
+        all_results = 0
+        process_max_files = max_files / num_processes
         with ProcessPoolExecutor(max_workers=num_processes) as executor:
             futures = [
-                executor.submit(_worker_process, token_holder, bucket_name, prefix, func, kwargs)
+                executor.submit(_worker_process, shared_data, bucket_name, prefix, process_max_files, func, kwargs)
                 for _ in range(num_processes)
             ]
             for i, future in enumerate(futures, 1):
                 process_results = future.result()
-                all_results.extend(process_results)
-                logger.info(f"Process {i} completed with {len(process_results)} results")
+                all_results += process_results
+                logger.info(f"Process {i} completed processing {process_results} files")
         
-        logger.info(f"All processes finished. Total results: {len(all_results)}")
+        logger.info(f"All processes finished. Total files processed: {all_results}")
         return all_results
 
 
@@ -213,15 +228,30 @@ if __name__ == "__main__":
         help='Number of processes for concurrent processing (default: 4)'
     )
     parser.add_argument(
+        '--max-files',
+        type=int,
+        default=100,
+        help='Maximum number of files to process (default: 100)'
+    )
+    parser.add_argument(
+        '--offset',
+        type=int,
+        default=0,
+        help='Offset for processing (default: 0)'
+    )
+    parser.add_argument(
         '--action',
         type=str,
         choices=['process_l3', 'compute_tiles', 'both'],
         default='both',
     )
+    
     args = parser.parse_args()
     
     output_dir = args.output_dir
     num_processes = args.num_processes
+    max_files = args.max_files
+    offset = args.offset
 
     logger = logging.getLogger()
 
@@ -232,7 +262,9 @@ if __name__ == "__main__":
             bucket_name='stpubdata',
             prefix='roman/nexus/soc_simulations/r00342/l3/',
             num_processes=num_processes,
-            output_dir=output_dir
+            output_dir=output_dir,
+            max_files=max_files,
+            offset=offset
         )
 
     if args.action in ['compute_tiles', 'both']:
