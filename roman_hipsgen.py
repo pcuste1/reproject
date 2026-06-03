@@ -14,7 +14,11 @@ import numpy as np
 import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
+from astroquery.mast.missions import MastMissions
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 
+# ignore warnings from roman datamodels version mismatch
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -27,6 +31,7 @@ from typing import Callable, Any, List, Dict
 from threading import Lock
 import boto3
 
+# from tqdm import tqdm
 import logging
 
 # Configure logging
