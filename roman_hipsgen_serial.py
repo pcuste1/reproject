@@ -83,6 +83,7 @@ def process_l3_from_s3(output_dir, current_offset):
     mm = MastMissions(mission='roman')
     _use_mast_test(mm)
     
+    logger.info("Querying MAST for L3 images...")
     query_results = mm.query_criteria(
         productLevel='3',
         offset=current_offset,
