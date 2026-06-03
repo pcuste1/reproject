@@ -17,8 +17,8 @@ from botocore.config import Config
 from astroquery.mast.missions import MastMissions
 from astropy.coordinates import SkyCoord
 import astropy.units as u
-from glob import glob
 
+# ignore warnings from roman datamodels version mismatch
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -32,7 +32,7 @@ from multiprocessing import Manager
 import boto3
 import argparse
 
-from tqdm import tqdm
+# from tqdm import tqdm
 import logging
 
 # Configure logging
