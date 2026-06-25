@@ -5,7 +5,7 @@ import uuid
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from itertools import product
 from logging import getLogger
 from pathlib import Path
@@ -649,7 +649,7 @@ def reproject_to_hips(
         "creator_did": f"ivo://reproject/P/{str(uuid.uuid4())}",
         "obs_title": os.path.basename(os.path.normpath(output_directory)),
         "hips_version": "1.4",
-        "hips_release_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ"),
+        "hips_release_date": datetime.now(UTC).strftime("%Y-%m-%dT%H:%MZ"),
         "hips_status": "public master clonableOnce",
         "hips_tile_format": tile_format,
         "hips_tile_width": tile_size,
@@ -774,7 +774,8 @@ def compute_lower_resolution_tiles(
     if len(indices) == 0:
         warnings.warn(
             "No tiles were generated at the deepest level, so no "
-            "lower-resolution tiles will be produced"
+            "lower-resolution tiles will be produced",
+            stacklevel=2,
         )
         return
 
