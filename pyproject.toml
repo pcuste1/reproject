@@ -27,6 +27,7 @@ dependencies = [
     "astroquery",
     "requests",
     "aiohttp",
+    "mocpy>=0.20",
 ]
 dynamic = ["version"]
 
