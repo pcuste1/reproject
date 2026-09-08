@@ -397,7 +397,6 @@ def reproject_to_hips(
     separations = cor_skycoord.separation(cen_skycoord)
 
     if np.any(np.isnan(separations)):
-
         # At least one of the corners is outside of the region of validity of
         # the WCS, so we use a different approach where we randomly sample a
         # number of positions in the image and then check the maximum
@@ -417,7 +416,6 @@ def reproject_to_hips(
         max_separation = np.nanmax(separations)
 
     else:
-
         max_separation = separations.max()
 
     radius = 1.5 * max_separation
@@ -438,10 +436,8 @@ def reproject_to_hips(
     spatial_level = level
 
     if ndim == 3:
-
         # If depth level has not been specified, try and determine it
         if level_depth is None:
-
             for level_depth in range(52):  # FREQ_MAX_ORDER
                 spectral_indices_edges = spectral_coord_to_index(level_depth, cor_spectralcoord)
                 if np.ptp(spectral_indices_edges) > array_in.shape[0]:
@@ -465,7 +461,6 @@ def reproject_to_hips(
         tile_dims = (tile_size, tile_depth)
 
     else:
-
         tile_dims = tile_size
 
     # logger.info(f"Found {len(indices)} tiles (at most) to generate at level {level}")
@@ -528,7 +523,6 @@ def reproject_to_hips(
         header = tile_header(level=level, index=index, frame=frame, tile_dims=tile_dims)
 
         if isinstance(header, tuple):
-
             array_out1, footprint1 = reproject_function(
                 (array_in, wcs_in_copy), header[0], **kwargs
             )
@@ -739,7 +733,6 @@ def reproject_to_hips(
 def find_indices(*, output_directory, ndim, spatial_level, level_depth):
 
     if ndim == 2:
-
         norder_directory = os.path.join(
             output_directory,
             f"Norder{spatial_level}",
@@ -753,7 +746,6 @@ def find_indices(*, output_directory, ndim, spatial_level, level_depth):
                     raise Exception(f"Unexpected filename format: {filename}")
 
     else:
-
         norder_directory = os.path.join(
             output_directory,
             f"Norder{spatial_level}_{level_depth}",
@@ -810,7 +802,6 @@ def compute_lower_resolution_tiles(
         return
 
     for sub in range(1, spatial_level + 1):
-
         if ndim == 2:
             ilevel = spatial_level - sub
         else:
@@ -847,14 +838,12 @@ def compute_lower_resolution_tiles(
         make_tile_folders(level=ilevel, indices=indices, output_directory=output_directory)
 
         for index in indices:
-
             header = tile_header(level=ilevel, index=index, frame=frame, tile_dims=tile_dims)
 
             if isinstance(header, tuple):
                 header = header[0]
 
             if ndim == 2:
-
                 if tile_format == "fits":
                     array = np.zeros((tile_size, tile_size)) * np.nan
                 elif tile_format == "png":
@@ -863,7 +852,6 @@ def compute_lower_resolution_tiles(
                     array = np.zeros((tile_size, tile_size, 3), dtype=np.uint8)
 
                 for subindex in range(4):
-
                     current_index = 4 * index + subindex
                     subtile_filename = tile_filename(
                         level=ilevel + 1,
@@ -873,7 +861,6 @@ def compute_lower_resolution_tiles(
                     )
 
                     if os.path.exists(subtile_filename):
-
                         if tile_format == "fits":
                             tile_data = fits.getdata(subtile_filename)
                             # np.nanmean can emit warnings, so ignore these
@@ -897,7 +884,6 @@ def compute_lower_resolution_tiles(
                             array[:half_tile_size, half_tile_size:] = data
 
             elif ndim == 3:
-
                 array = np.ones((tile_depth, tile_size, tile_size)) * np.nan
 
                 # When the spectral order is unchanged (clamped at 0) we only
@@ -906,7 +892,6 @@ def compute_lower_resolution_tiles(
 
                 for subindex in range(4):
                     for subindex_spec in spec_subindices:
-
                         if spectral_changed:
                             current_spectral_index = 2 * index[1] + subindex_spec
                         else:
@@ -921,7 +906,6 @@ def compute_lower_resolution_tiles(
                         )
 
                         if os.path.exists(subtile_filename):
-
                             # np.nanmean can emit warnings, so ignore these
                             with warnings.catch_warnings():
                                 warnings.simplefilter("ignore")
@@ -1028,7 +1012,6 @@ def coadd_hips(input_directories, output_directory):
     os.makedirs(output_directory, exist_ok=False)
 
     for directory in input_directories:
-
         for dirpath, _, filenames in os.walk(directory):
             for filename in filenames:
                 if not filename.endswith("." + tile_format):
