@@ -3,17 +3,15 @@
 import dask.array as da
 import numpy as np
 from astropy.wcs import WCS
+from astropy.wcs.utils import pixel_to_pixel
 
 from .._array_utils import dask_map_coordinates, map_coordinates
-from .._wcs_utils import has_celestial, pixel_to_pixel_chunked
+from .._wcs_utils import has_celestial, pixel_to_pixel_with_roundtrip
 
 
 def _validate_wcs(wcs_in, wcs_out, shape_in, shape_out):
     if wcs_in.low_level_wcs.pixel_n_dim != wcs_out.low_level_wcs.pixel_n_dim:
-        raise ValueError(
-            "Number of dimensions in input and output WCS should match "
-            f"(got {wcs_in.low_level_wcs.pixel_n_dim} and {wcs_out.low_level_wcs.pixel_n_dim})"
-        )
+        raise ValueError("Number of dimensions in input and output WCS should match")
     elif len(shape_out) < wcs_out.low_level_wcs.pixel_n_dim:
         raise ValueError("Too few dimensions in shape_out")
     elif len(shape_in) < wcs_in.low_level_wcs.pixel_n_dim:
@@ -111,19 +109,13 @@ def _reproject_full(
         sparse=False,
         copy=False,
     )
-    # For each pixel in the output array, get the pixel value in the input
-    # WCS, transforming in chunks and writing directly into the
-    # (n_dim, n_pixels) coordinate array that map_coordinates needs, so the
-    # meshgrid views are never expanded into full-size arrays and no
-    # full-size stacking copy is made
-    pixel_in = np.empty((len(pixel_out), pixel_out[0].size))
-    pixel_to_pixel_chunked(
-        wcs_out,
-        wcs_in,
-        *pixel_out[::-1],
-        roundtrip=roundtrip_coords,
-        output=list(pixel_in[::-1]),
-    )
+    pixel_out = [p.ravel() for p in pixel_out]
+    # For each pixel in the output array, get the pixel value in the input WCS
+    if roundtrip_coords:
+        pixel_in = pixel_to_pixel_with_roundtrip(wcs_out, wcs_in, *pixel_out[::-1])[::-1]
+    else:
+        pixel_in = pixel_to_pixel(wcs_out, wcs_in, *pixel_out[::-1])[::-1]
+    pixel_in = np.array(pixel_in)
 
     # Loop over the broadcasted dimensions in our array, reusing the same
     # computed transformation each time
@@ -146,12 +138,7 @@ def _reproject_full(
                 cval=np.nan,
                 mode="constant",
                 output=array_out_loopable[i].ravel(),
-                # max_chunk_size is a number of elements, not bytes, so this
-                # bounds the copies made for non-native (e.g. FITS) data to
-                # 64MB for 32-bit and 128MB for 64-bit values, which costs
-                # only a few percent in speed compared to larger chunks even
-                # when the coordinates span the whole input array
-                max_chunk_size=16 * 1024**2,
+                max_chunk_size=256 * 1024**2,
             )
 
     # n.b. We write the reprojected data into array_out_loopable, but array_out

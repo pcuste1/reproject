@@ -1,7 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
 import itertools
-import logging
 
 import dask.array as da
 import numpy as np
@@ -575,10 +574,7 @@ def test_reproject_roundtrip_kwarg(aia_test_data):
         block_size=(32, 32),
     )
 
-    # The blocked path interpolates with coordinates offset to each block's
-    # clipped input region, which changes the float32 rounding slightly, so
-    # the results are not bitwise identical to the unblocked ones.
-    assert_allclose(output_roundtrip_1, output_roundtrip_2, rtol=1e-5)
+    assert_allclose(output_roundtrip_1, output_roundtrip_2)
 
     output_noroundtrip_1 = reproject_interp(
         (data, wcs),
@@ -596,7 +592,7 @@ def test_reproject_roundtrip_kwarg(aia_test_data):
         block_size=(32, 32),
     )
 
-    assert_allclose(output_noroundtrip_1, output_noroundtrip_2, rtol=1e-5)
+    assert_allclose(output_noroundtrip_1, output_noroundtrip_2)
 
     # The array with round-tripping should have more NaN values:
     assert np.sum(np.isnan(output_roundtrip_1)) > 9500
@@ -632,8 +628,7 @@ def test_identity_with_offset(roundtrip_coords):
     assert_allclose(expected, array_out, atol=1e-10)
 
 
-@pytest.fixture(scope="session")
-def broadcast_reprojection_setup():
+def _setup_for_broadcast_test():
     with fits.open(get_pkg_data_filename("data/galactic_2d.fits", package="reproject.tests")) as pf:
         hdu_in = pf[0]
         header_in = hdu_in.header.copy()
@@ -655,19 +650,15 @@ def broadcast_reprojection_setup():
         array_ref[i] = array_out
         footprint_ref[i] = footprint_out
 
-    yield image_stack, array_ref, footprint_ref, header_in, header_out
+    return image_stack, array_ref, footprint_ref, header_in, header_out
 
 
 @pytest.mark.parametrize("input_extra_dims", (1, 2))
 @pytest.mark.parametrize("output_shape", (None, "single", "full"))
 @pytest.mark.parametrize("input_as_wcs", (True, False))
 @pytest.mark.parametrize("output_as_wcs", (True, False))
-def test_broadcast_reprojection(
-    input_extra_dims, output_shape, input_as_wcs, output_as_wcs, broadcast_reprojection_setup
-):
-
-    image_stack, array_ref, footprint_ref, header_in, header_out = broadcast_reprojection_setup
-
+def test_broadcast_reprojection(input_extra_dims, output_shape, input_as_wcs, output_as_wcs):
+    image_stack, array_ref, footprint_ref, header_in, header_out = _setup_for_broadcast_test()
     # Test both single and multiple dimensions being broadcast
     if input_extra_dims == 2:
         image_stack = image_stack.reshape((2, 2, *image_stack.shape[-2:]))
@@ -710,12 +701,8 @@ def test_broadcast_reprojection(
 @pytest.mark.parametrize("parallel", [True, False])
 @pytest.mark.parametrize("header_or_wcs", (lambda x: x, WCS))
 @pytest.mark.filterwarnings("ignore::astropy.wcs.wcs.FITSFixedWarning")
-def test_blocked_broadcast_reprojection(
-    input_extra_dims, output_shape, parallel, header_or_wcs, broadcast_reprojection_setup
-):
-
-    image_stack, array_ref, footprint_ref, header_in, header_out = broadcast_reprojection_setup
-
+def test_blocked_broadcast_reprojection(input_extra_dims, output_shape, parallel, header_or_wcs):
+    image_stack, array_ref, footprint_ref, header_in, header_out = _setup_for_broadcast_test()
     # Test both single and multiple dimensions being broadcast
     if input_extra_dims == 2:
         image_stack = image_stack.reshape((2, 2, *image_stack.shape[-2:]))
@@ -741,13 +728,6 @@ def test_blocked_broadcast_reprojection(
     np.testing.assert_allclose(array_broadcast, array_ref)
 
 
-@pytest.fixture(scope="session")
-def blocked_against_single_reference():
-    hdu1 = fits.open(get_pkg_data_filename("galactic_center/gc_2mass_k.fits"))[0]
-    hdu2 = fits.open(get_pkg_data_filename("galactic_center/gc_msx_e.fits"))[0]
-    yield reproject_interp(hdu2, hdu1.header, parallel=False, block_size=None)
-
-
 @pytest.mark.parametrize("parallel", [True, 2, False])
 @pytest.mark.parametrize("block_size", [[500, 500], [500, 100], None])
 @pytest.mark.parametrize("return_footprint", [False, True])
@@ -756,12 +736,7 @@ def blocked_against_single_reference():
 @pytest.mark.remote_data
 @pytest.mark.filterwarnings("ignore::astropy.wcs.wcs.FITSFixedWarning")
 def test_blocked_against_single(
-    parallel,
-    block_size,
-    return_footprint,
-    existing_outputs,
-    header_or_wcs,
-    blocked_against_single_reference,
+    parallel, block_size, return_footprint, existing_outputs, header_or_wcs
 ):
     # Ensure when we break a reprojection down into multiple discrete blocks
     # it has the same result as if all pixels where reprejcted at once
@@ -776,9 +751,13 @@ def test_blocked_against_single(
     if existing_outputs:
         output_array_test = np.zeros(shape_out)
         output_footprint_test = np.zeros(shape_out)
+        output_array_reference = np.zeros(shape_out)
+        output_footprint_reference = np.zeros(shape_out)
     else:
         output_array_test = None
         output_footprint_test = None
+        output_array_reference = None
+        output_footprint_reference = None
 
     result_test = reproject_interp(
         hdu2,
@@ -790,17 +769,29 @@ def test_blocked_against_single(
         output_footprint=output_footprint_test,
     )
 
-    array_reference, footprint_reference = blocked_against_single_reference
+    result_reference = reproject_interp(
+        hdu2,
+        header_or_wcs(hdu1.header),
+        parallel=False,
+        block_size=None,
+        return_footprint=return_footprint,
+        output_array=output_array_reference,
+        output_footprint=output_footprint_reference,
+    )
 
     if return_footprint:
         array_test, footprint_test = result_test
+        array_reference, footprint_reference = result_reference
     else:
         array_test = result_test
+        array_reference = result_reference
 
     if existing_outputs:
         assert array_test is output_array_test
+        assert array_reference is output_array_reference
         if return_footprint:
             assert footprint_test is output_footprint_test
+            assert footprint_reference is output_footprint_reference
 
     np.testing.assert_allclose(array_test, array_reference, equal_nan=True)
     if return_footprint:
@@ -863,34 +854,6 @@ def test_reproject_order(block_size):
 
         with pytest.raises(AssertionError):
             assert_allclose(array_out_bilinear, array_out_biquadratic)
-
-
-def test_blocked_reprojection_sliced_memmap(tmp_path):
-    # A sliced memmap view keeps the parent's unadjusted .offset, so it must
-    # not be reconstructed from filename and offset inside the block tasks
-    # (which would silently reproject the wrong file region); views are passed
-    # by reference instead. Slicing off leading rows keeps the view
-    # c-contiguous, which is the case that used to take the reconstruction
-    # path.
-
-    hdu1 = fits.open(get_pkg_data_filename("galactic_center/gc_2mass_k.fits"))[0]
-    hdu2 = fits.open(get_pkg_data_filename("galactic_center/gc_msx_e.fits"))[0]
-
-    mm = np.memmap(tmp_path / "image.np", mode="w+", dtype=hdu2.data.dtype, shape=hdu2.data.shape)
-    mm[:] = hdu2.data
-    mm.flush()
-
-    wcs_in = WCS(hdu2.header)[5:]
-
-    reference, _ = reproject_interp(
-        (hdu2.data[5:], wcs_in), hdu1.header, parallel=False, block_size=None
-    )
-
-    array_out, _ = reproject_interp(
-        (mm[5:], wcs_in), hdu1.header, parallel=True, block_size=(100, 100)
-    )
-
-    assert_allclose(array_out, reference, equal_nan=True)
 
 
 def test_reproject_block_size_broadcasting():
@@ -982,7 +945,7 @@ def test_auto_block_size(dask_method):
     wcs_out = WCS(naxis=2)
 
     # When block size and parallel aren't specified, can't return as dask arrays
-    with pytest.raises(ValueError, match="Output cannot be returned as dask or zarr arrays"):
+    with pytest.raises(ValueError, match="Output cannot be returned as dask arrays"):
         reproject_interp(
             (array_in, wcs_in),
             wcs_out,
@@ -1038,10 +1001,6 @@ def test_reproject_parallel_broadcasting(caplog, dask_method):
 
     # Unit test for reprojecting using parallelization along broadcasted
     # dimensions
-
-    # Ensure caplog captures INFO regardless of the global pytest log
-    # configuration, since this test relies on it.
-    caplog.set_level(logging.INFO, logger="reproject._common")
 
     array_in = np.ones((350, 250, 150))
     wcs_in = WCS(naxis=2)
@@ -1110,6 +1069,7 @@ def test_reproject_order_method(order):
     # end up producing the same results
 
     with fits.open(get_pkg_data_filename("data/galactic_2d.fits", package="reproject.tests")) as pf:
+
         hdu_in = pf[0]
 
         header_out = hdu_in.header.copy()
@@ -1138,7 +1098,4 @@ def test_reproject_order_method(order):
             dask_method="none",
         )
 
-        # The two dask methods route through different map_coordinates
-        # implementations (numpy with per-block input clipping vs dask-image),
-        # which agree to within rounding but not bitwise.
-        assert_allclose(array_out_memmap, array_out_none, rtol=1e-5)
+        assert_allclose(array_out_memmap, array_out_none)

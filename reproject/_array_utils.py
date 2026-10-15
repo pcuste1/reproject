@@ -153,24 +153,17 @@ def dask_map_coordinates(image, coords, output=None, **kwargs):
             else:
                 raise exc
 
-    # dask-image's map_coordinates cannot handle NaN or out-of-range
-    # coordinates (its chunk lookup indexes past the ends of the chunk grid),
-    # so both are filtered out; the out-of-range points are reset to cval
-    # below anyway, and skipping them is a good idea for performance too
+    # dask-image's map_coordinates will crash if NaN values are passed in
+    # coords, so we filter these out (this is a good idea anyway for performance)
     keep = ~np.any(np.isnan(coords), axis=0)
-    for i in range(coords.shape[0]):
-        keep &= (coords[i] >= 0) & (coords[i] <= original_shape[i] - 1)
 
     # At the time of writing, dask-image's map_coordinates prefilter is False
     # by default, we hard-code this here to guard against any changes in
     # default
 
-    # A block can have no valid coordinates at all (e.g. entirely outside the
-    # input image), in which case the whole output stays at cval
-    if np.any(keep):
-        output[keep] = dask_image_map_coordinates(
-            image, coords[:, keep], prefilter=False, **kwargs
-        ).compute()
+    output[keep] = dask_image_map_coordinates(
+        image, coords[:, keep], prefilter=False, **kwargs
+    ).compute()
 
     reset = np.zeros(coords.shape[1], dtype=bool)
 
@@ -235,6 +228,7 @@ def map_coordinates(
             padding = 10
 
         for chunk in iterate_chunks(image.shape, max_chunk_size=max_chunk_size):
+
             include[...] = True
             for idim, slc in enumerate(chunk):
                 include[(coords[idim] < slc.start) | (coords[idim] >= slc.stop)] = False
@@ -244,29 +238,17 @@ def map_coordinates(
 
             chunk = list(chunk)
 
-            coords_subset = coords[:, include].copy()
-
-            # Clip each chunk to the bounding box of the coordinates that fall
-            # inside it (plus the interpolation padding), since the coordinates
-            # can cover a region much smaller than the chunk, in which case only
-            # that region needs to be accessed and, for non-native data (which
-            # scipy's map_coordinates copies internally), copied. Coordinates
-            # can be NaN (e.g. for pixels that fail round-tripping), which the
-            # interpolation turns into NaN values, so the bounding box is
-            # computed from the finite coordinates, keeping the whole (padded)
-            # chunk if there are none.
+            # Adjust chunks to add padding
             for idim, slc in enumerate(chunk):
-                finite = coords_subset[idim][np.isfinite(coords_subset[idim])]
-                if len(finite) > 0:
-                    start = max(0, int(np.floor(finite.min())) - padding)
-                    stop = min(original_shape[idim], int(np.ceil(finite.max())) + 1 + padding)
-                else:
-                    start = max(0, slc.start - padding)
-                    stop = min(original_shape[idim], slc.stop + padding)
+                start = max(0, slc.start - padding)
+                stop = min(original_shape[idim], slc.stop + padding)
                 chunk[idim] = slice(start, stop)
-                coords_subset[idim, :] -= start
 
             chunk = tuple(chunk)
+
+            coords_subset = coords[:, include].copy()
+            for idim, slc in enumerate(chunk):
+                coords_subset[idim, :] -= slc.start
 
             if optimize_memory:
                 image_subset = memory_efficient_access(image, chunk)
@@ -308,6 +290,7 @@ def sample_array_edges(shape, *, n_samples):
 
 
 class ArrayWrapper:
+
     def __init__(self, array):
         self._array = array
         self.ndim = array.ndim

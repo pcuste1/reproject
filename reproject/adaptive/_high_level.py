@@ -30,11 +30,9 @@ def reproject_adaptive(
     output_footprint=None,
     return_footprint=True,
     block_size=None,
-    non_reprojected_dims=None,
     parallel=False,
     return_type=None,
     dask_method=None,
-    zarr_path=None,
 ):
     """
     Reproject a 2D array from one WCS to another using the DeForest (2004)
@@ -154,7 +152,7 @@ def reproject_adaptive(
               replaced by a constant value, set with the
               ``boundary_fill_value`` argument. Output values will be
               ``boundary_fill_value`` if there are no valid input samples.
-            * ``ignore`` --- Samples outside the input image are
+            * ``ignore`` --- Samples outside the input image are simply
               ignored, contributing neither to the output value nor the
               sum-of-weights normalization.
             * ``ignore_threshold`` --- Acts as ``ignore``, unless the total
@@ -207,18 +205,6 @@ def reproject_adaptive(
         the block size automatically determined. If ``block_size`` is not
         specified or set to `None`, the reprojection will not be carried out in
         blocks.
-    non_reprojected_dims : tuple, optional
-        Leading dimensions of the data that should not be reprojected but for
-        which a one-to-one mapping between input and output pixels is assumed.
-        This makes it possible to broadcast a reprojection over these dimensions
-        even when the input and output WCS have the same number of dimensions as
-        the data. The dimensions must be the leading ones, given as a tuple of
-        sequential integers starting from zero (e.g. ``(0,)`` or ``(0, 1)``).
-        Each non-reprojected slice is processed as a separate block, so if
-        ``block_size`` is specified, its entries along the reprojected
-        dimensions have to match ``shape_out``; if not, this block size is
-        used automatically. Set ``parallel`` to compute the blocks
-        concurrently.
     parallel : bool or int or str, optional
         If `True`, the reprojection is carried out in parallel, and if a
         positive integer, this specifies the number of threads to use.
@@ -226,13 +212,8 @@ def reproject_adaptive(
         by ``block_size`` (if the block size is not set, it will be determined
         automatically). To use the currently active dask scheduler (e.g.
         dask.distributed), set this to ``'current-scheduler'``.
-    return_type : {'numpy', 'dask', 'zarr'}, optional
-        Whether to return numpy or dask arrays, or to write the output to a zarr
-        array on disk. If ``'zarr'``, ``zarr_path`` must also be given; the
-        output is then computed in blocks (using dask, on the synchronous
-        scheduler when ``parallel`` is `False`), ``block_size`` defaults to
-        ``'auto'`` when not specified, and dask arrays backed by the zarr array
-        are returned.
+    return_type : {'numpy', 'dask'}, optional
+        Whether to return numpy or dask arrays.
     dask_method : {'memmap', 'none'}, optional
         Method to use when input array is a dask array. The methods are:
             * ``'memmap'``: write out the entire input dask array to a temporary
@@ -241,13 +222,10 @@ def reproject_adaptive(
               the entire array into memory.
             * ``'none'``: load the dask array into memory as needed. This may
               result in the entire array being loaded into memory. However,
-              this can be efficient under two conditions: if the array comfortably
+              this can be efficient under two conditions: if the array easily
               fits into memory (as this will then be faster than ``'memmap'``),
               and when the data contains more dimensions than the input WCS and
               the block_size is chosen to iterate over the extra dimensions.
-    zarr_path : str, optional
-        Path to use for the output zarr array when ``return_type='zarr'``. This
-        must be a path that does not already exist.
 
     Returns
     -------
@@ -275,7 +253,6 @@ def reproject_adaptive(
         array_out=output_array,
         parallel=parallel,
         block_size=block_size,
-        non_reprojected_dims=non_reprojected_dims,
         return_footprint=return_footprint,
         output_footprint=output_footprint,
         reproject_func_kwargs=dict(
@@ -295,6 +272,4 @@ def reproject_adaptive(
             bad_fill_value=bad_fill_value,
         ),
         return_type=return_type,
-        dask_method=dask_method,
-        zarr_path=zarr_path,
     )

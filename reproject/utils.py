@@ -110,9 +110,7 @@ def parse_input_data(input_data, hdu_in=None, source_hdul=None):
     if isinstance(input_data, str | Path):
         if is_png(input_data) or is_jpeg(input_data):
             data = np.array(Image.open(input_data)).transpose(2, 0, 1)[:, ::-1]
-            # The AVM WCS may be defined for a higher-resolution version of the
-            # image, so pass the actual image dimensions to rescale it if needed.
-            wcs = AVM.from_image(input_data).to_wcs(target_shape=(data.shape[2], data.shape[1]))
+            wcs = AVM.from_image(input_data).to_wcs()
             return data, wcs
         else:
             with fits.open(input_data) as hdul:
@@ -163,9 +161,7 @@ def parse_input_shape(input_shape, hdu_in=None):
     if isinstance(input_shape, str | Path):
         if is_png(input_shape) or is_jpeg(input_shape):
             shape = np.array(Image.open(input_shape)).transpose(2, 0, 1).shape
-            # The AVM WCS may be defined for a higher-resolution version of the
-            # image, so pass the actual image dimensions to rescale it if needed.
-            wcs = AVM.from_image(input_shape).to_wcs(target_shape=(shape[2], shape[1]))
+            wcs = AVM.from_image(input_shape).to_wcs()
             return shape, wcs
         else:
             with fits.open(input_shape) as hdulist:
@@ -337,9 +333,11 @@ def as_transparent_rgb(data, alpha=None):
     array = np.zeros((4,) + data.shape[1:], dtype=np.uint8)
 
     if alpha is None:
+
         alpha = np.ones(data.shape[1:])
 
     else:
+
         if alpha.ndim != 2:
             raise ValueError("alpha needs to be two-dimensional")
 
