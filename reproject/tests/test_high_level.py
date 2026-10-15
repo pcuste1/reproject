@@ -67,8 +67,7 @@ class TestReproject:
         with pytest.raises(ValueError) as exc:
             reproject_function(self.hdu_in, self.header_out)
         assert exc.value.args[0] == (
-            "Need to specify shape since output header "
-            "does not contain complete shape information"
+            "Need to specify shape since output header does not contain complete shape information"
         )
 
         reproject_interp(self.hdu_in, self.header_out_size)
@@ -82,8 +81,7 @@ class TestReproject:
         with pytest.raises(ValueError) as exc:
             reproject_function((self.array_in, self.wcs_in), self.header_out)
         assert exc.value.args[0] == (
-            "Need to specify shape since output header "
-            "does not contain complete shape information"
+            "Need to specify shape since output header does not contain complete shape information"
         )
 
         reproject_function((self.array_in, self.wcs_in), self.header_out_size)
@@ -122,7 +120,7 @@ LATPOLE =                 90.0 / [deg] Native latitude of celestial pole
 
 
 @pytest.mark.filterwarnings("ignore::FutureWarning")
-@pytest.mark.parametrize("projection_type, dtype", itertools.product(ALL_MODES, ALL_DTYPES))
+@pytest.mark.parametrize("projection_type, dtype", list(itertools.product(ALL_MODES, ALL_DTYPES)))
 def test_surface_brightness(projection_type, dtype):
     header_in = fits.Header.fromstring(INPUT_HDR, sep="\n")
     header_in["NAXIS"] = 2
