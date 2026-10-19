@@ -208,7 +208,7 @@ def reproject_to_hips(
     threads=False,
     properties=None,
     generate_moc=True,
-    allsky=True,
+    allsky=False,  # todo: revert this and update my script
     **kwargs,
 ):
     """
@@ -463,7 +463,7 @@ def reproject_to_hips(
     else:
         tile_dims = tile_size
 
-    # logger.info(f"Found {len(indices)} tiles (at most) to generate at level {level}")
+    logger.info(f"Found {len(indices)} tiles (at most) to generate at level {level}")
 
     # PERF: the code above may be prohibitive for large numbers of tiles,
     # so we may want to find a way to iterate over these in chunks.
@@ -715,6 +715,7 @@ def reproject_to_hips(
             coord_system=coord_system_out,
             spatial_level=spatial_level,
             level_depth=level_depth if ndim == 3 else None,
+            s3_storage=s3_storage,
         )
 
     if allsky and ndim == 2:

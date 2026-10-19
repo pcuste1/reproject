@@ -9,7 +9,7 @@ __all__ = ["save_moc"]
 COORDSYS = {"equatorial": "C", "galactic": "G", "ecliptic": "E"}
 
 
-def save_moc(*, output_directory, indices, coord_system, spatial_level, level_depth=None):
+def save_moc(*, output_directory, indices, coord_system, spatial_level, level_depth=None, s3_storage=None):
     """
     Write a ``Moc.fits`` coverage file at the root of a HiPS dataset.
 
@@ -53,7 +53,26 @@ def save_moc(*, output_directory, indices, coord_system, spatial_level, level_de
         moc = MOC.from_healpix_cells(
             ipix=ipix, depth=np.full(ipix.size, spatial_level), max_depth=spatial_level
         )
-        moc.save(filename, format="fits", overwrite=True, fits_keywords=fits_keywords)
+
+        if s3_storage:
+            if s3_storage.exists(filename):
+                existing = s3_storage.read_fits(filename)
+                existing_moc = MOC.from_fits(existing)
+                moc = moc | existing_moc
+
+            import mocpy
+            from astropy.io import fits
+            
+            hdulist = fits.HDUList.fromstring(
+                mocpy.to_fits_raw(moc.store_index, False),
+            )
+            hdu = hdulist[1]
+            if fits_keywords:
+                for key in fits_keywords:
+                    hdu.header[key] = fits_keywords[key]
+            s3_storage.write_fits(filename, hdulist, header=fits_keywords)
+        else:
+            moc.save(filename, format="fits", overwrite=True, header=fits_keywords)
 
     else:
         # Group the spatial cells by the frequency cell they belong to. The
