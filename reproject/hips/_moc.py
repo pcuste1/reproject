@@ -66,7 +66,7 @@ def save_moc(*, output_directory, indices, coord_system, spatial_level, level_de
             hdulist = fits.HDUList.fromstring(
                 mocpy.to_fits_raw(moc.store_index, False),
             )
-            hdu = hdulist[1]
+            hdu = hdulist[0]
             if fits_keywords:
                 for key in fits_keywords:
                     hdu.header[key] = fits_keywords[key]
