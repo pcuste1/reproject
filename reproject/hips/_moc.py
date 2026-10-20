@@ -1,3 +1,4 @@
+import io
 import os
 
 import numpy as np
@@ -56,21 +57,21 @@ def save_moc(*, output_directory, indices, coord_system, spatial_level, level_de
 
         if s3_storage:
             if s3_storage.exists(filename):
-                existing = s3_storage.read_fits(filename)
+                existing = io.BytesIO(s3_storage.read_bytes(filename))
                 existing_moc = MOC.from_fits(existing)
                 moc = moc | existing_moc
 
             from mocpy import mocpy
             from astropy.io import fits
-            
+
             hdulist = fits.HDUList.fromstring(
                 mocpy.to_fits_raw(moc.store_index, False),
             )
-            hdu = hdulist[0]
+            hdu = hdulist[1]
             if fits_keywords:
                 for key in fits_keywords:
                     hdu.header[key] = fits_keywords[key]
-            s3_storage.write_fits(filename, hdulist, header=hdu.header)
+            s3_storage.write_fits(filename, hdulist)
         else:
             moc.save(filename, format="fits", overwrite=True, fits_keywords=fits_keywords)
 

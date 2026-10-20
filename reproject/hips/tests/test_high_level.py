@@ -1,3 +1,4 @@
+import io
 import os
 import re
 import warnings
@@ -537,6 +538,44 @@ def test_moc_2d_galactic_coordsys(tmp_path, simple_celestial_fits_wcs):
         output_directory=output_directory,
     )
     assert fits.getheader(output_directory / "Moc.fits", 1)["COORDSYS"] == "G"
+
+
+def test_moc_2d_s3_storage():
+    from .._high_level import S3Storage
+    from .._moc import save_moc
+
+    objects = {}
+    storage = object.__new__(S3Storage)
+    storage.exists = objects.__contains__
+    storage.read_bytes = objects.__getitem__
+    storage.write_bytes = objects.__setitem__
+
+    save_moc(
+        output_directory="dataset",
+        indices=[1],
+        coord_system="equatorial",
+        spatial_level=2,
+        s3_storage=storage,
+    )
+    save_moc(
+        output_directory="dataset",
+        indices=[2],
+        coord_system="equatorial",
+        spatial_level=2,
+        s3_storage=storage,
+    )
+
+    with fits.open(io.BytesIO(objects["dataset/Moc.fits"])) as hdulist:
+        assert len(hdulist) == 2
+        assert hdulist[1].header["COORDSYS"] == "C"
+
+    from mocpy import MOC
+
+    actual = MOC.from_fits(io.BytesIO(objects["dataset/Moc.fits"]))
+    expected = MOC.from_healpix_cells(
+        ipix=np.array([1, 2]), depth=np.array([2, 2]), max_depth=2
+    )
+    assert actual == expected
 
 
 def test_moc_3d(tmp_path):

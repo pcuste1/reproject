@@ -123,11 +123,14 @@ class S3Storage:
         with fits.open(io.BytesIO(data_bytes)) as hdulist:
             return hdulist[0].data.copy(), hdulist[0].header.copy()
 
-    def write_fits(self, key, data, header):
+    def write_fits(self, key, data, header=None):
         """Write FITS file to S3."""
         with io.BytesIO() as f:
-            hdu = fits.PrimaryHDU(data=data, header=header)
-            hdu.writeto(f, overwrite=True)
+            if isinstance(data, fits.HDUList):
+                data.writeto(f, overwrite=True)
+            else:
+                hdu = fits.PrimaryHDU(data=data, header=header)
+                hdu.writeto(f, overwrite=True)
             f.seek(0)
             self.write_bytes(key, f.read())
 
