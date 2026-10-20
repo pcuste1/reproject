@@ -60,7 +60,7 @@ def save_moc(*, output_directory, indices, coord_system, spatial_level, level_de
                 existing_moc = MOC.from_fits(existing)
                 moc = moc | existing_moc
 
-            import mocpy
+            from mocpy import mocpy
             from astropy.io import fits
             
             hdulist = fits.HDUList.fromstring(
