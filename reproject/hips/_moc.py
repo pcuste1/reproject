@@ -70,7 +70,7 @@ def save_moc(*, output_directory, indices, coord_system, spatial_level, level_de
             if fits_keywords:
                 for key in fits_keywords:
                     hdu.header[key] = fits_keywords[key]
-            s3_storage.write_fits(filename, hdulist, header=fits_keywords)
+            s3_storage.write_fits(filename, hdulist, header=hdu.header)
         else:
             moc.save(filename, format="fits", overwrite=True, fits_keywords=fits_keywords)
 
