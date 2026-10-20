@@ -70,6 +70,27 @@ def test_reproject_to_hips(tmp_path, valid_celestial_input_data):
     assert_files_expected(output_directory, expected)
 
 
+def test_reproject_to_hips_local_moc_uses_no_s3_storage(
+    tmp_path, simple_celestial_fits_wcs, monkeypatch
+):
+    s3_storage_values = []
+
+    def save_moc(**kwargs):
+        s3_storage_values.append(kwargs["s3_storage"])
+
+    monkeypatch.setattr("reproject.hips._high_level.save_moc", save_moc)
+
+    reproject_to_hips(
+        (np.ones((30, 40)), simple_celestial_fits_wcs),
+        coord_system_out="equatorial",
+        level=2,
+        reproject_function=reproject_interp,
+        output_directory=tmp_path / "output",
+    )
+
+    assert s3_storage_values == [None]
+
+
 EXPECTED_FILES_GALACTIC = [
     "Moc.fits",
     "Norder0/Allsky.fits",
