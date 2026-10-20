@@ -308,6 +308,7 @@ def reproject_to_hips(
     # Check if output_directory is an S3 URL and parse it
     s3_bucket_parsed, s3_prefix_parsed, s3_directory = _parse_s3_url(output_directory)
     use_s3 = s3_bucket_parsed is not None
+    s3_storage = None
 
     if use_s3:
         # S3 URL provided in output_directory
