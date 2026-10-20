@@ -72,7 +72,7 @@ def save_moc(*, output_directory, indices, coord_system, spatial_level, level_de
                     hdu.header[key] = fits_keywords[key]
             s3_storage.write_fits(filename, hdulist, header=fits_keywords)
         else:
-            moc.save(filename, format="fits", overwrite=True, header=fits_keywords)
+            moc.save(filename, format="fits", overwrite=True, fits_keywords=fits_keywords)
 
     else:
         # Group the spatial cells by the frequency cell they belong to. The

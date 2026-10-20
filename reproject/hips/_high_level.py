@@ -208,7 +208,8 @@ def reproject_to_hips(
     threads=False,
     properties=None,
     generate_moc=True,
-    allsky=False,  # todo: revert this and update my script
+    allsky=True,
+    generate_low_level=True,
     **kwargs,
 ):
     """
@@ -308,6 +309,7 @@ def reproject_to_hips(
     # Check if output_directory is an S3 URL and parse it
     s3_bucket_parsed, s3_prefix_parsed, s3_directory = _parse_s3_url(output_directory)
     use_s3 = s3_bucket_parsed is not None
+    s3_storage = None
 
     if use_s3:
         # S3 URL provided in output_directory
@@ -716,6 +718,18 @@ def reproject_to_hips(
             spatial_level=spatial_level,
             level_depth=level_depth if ndim == 3 else None,
             s3_storage=s3_storage,
+        )
+
+    if generate_low_level:
+        compute_lower_resolution_tiles(
+            output_directory=output_directory,
+            ndim=ndim,
+            frame=frame,
+            tile_format=tile_format,
+            tile_size=tile_size,
+            tile_depth=tile_depth,
+            spatial_level=spatial_level,
+            level_depth=level_depth,
         )
 
     if allsky and ndim == 2:
